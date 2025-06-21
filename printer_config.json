@@ -1,0 +1,17 @@
+{
+  "printers": {
+    "label": {
+      "name": "CG408",
+      "options": []
+    },
+    "receipt": {
+      "name": "L360-Series",
+      "options": []
+    }
+  },
+  "settings": {
+    "auto_print": true,
+    "auto_clear": true,
+    "timeout": 30
+  }
+}
