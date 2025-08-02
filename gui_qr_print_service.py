@@ -152,32 +152,52 @@ class QRPDFPrinter:
         # Focus on QR input field
         self.qr_entry.focus_set()
         
-    def get_media_options(self, print_type):
-        """Get available media options for a print type"""
-        if print_type == 'label':
-            return [
-                'auto (printer default)',
-                'Custom.2x1in',
-                'Custom.4x6in', 
-                'Custom.51x25mm',
-                'Custom.102x51mm',
-                'Custom.4x2in',
-                'Custom.3x1in',
-                'Custom.62x29mm',
-                'na_index-4x6_4x6in',
-                'om_small-photo_100x150mm'
-            ]
-        elif print_type == 'receipt':
-            return [
-                'auto (printer default)',
-                'Receipt',
-                'Custom.3x11in',
-                'Custom.80mm',
-                'Custom.58mm',
-                'Custom.57x32000mm',
-                'Custom.80x200mm'
-            ]
-        return ['auto (printer default)']
+    def get_media_options(self, printer_type_id):
+        """Get available media options for a printer type"""
+        if printer_type_id in self.config["printer_types"]:
+            return self.config["printer_types"][printer_type_id].get("media_options", ["auto (printer default)"])
+        return ["auto (printer default)"]
+    
+    def get_printer_types(self):
+        """Get all configured printer types"""
+        return list(self.config["printer_types"].keys())
+    
+    def get_valid_prefixes(self):
+        """Get all valid QR prefixes"""
+        prefixes = []
+        for type_config in self.config["printer_types"].values():
+            prefixes.append(type_config["prefix"])
+        return prefixes
+    
+    def get_printer_type_by_prefix(self, prefix):
+        """Get printer type ID by QR prefix"""
+        for type_id, type_config in self.config["printer_types"].items():
+            if type_config["prefix"] == prefix:
+                return type_id
+        return None
+    
+    def add_printer_type(self, type_id, display_name, prefix, media_options=None):
+        """Add a new printer type"""
+        if media_options is None:
+            media_options = ["auto (printer default)"]
+        
+        self.config["printer_types"][type_id] = {
+            "display_name": display_name,
+            "prefix": prefix,
+            "printer_name": "default",
+            "media": "auto (printer default)",
+            "options": [],
+            "media_options": media_options
+        }
+        self.save_config()
+    
+    def remove_printer_type(self, type_id):
+        """Remove a printer type"""
+        if type_id in self.config["printer_types"] and len(self.config["printer_types"]) > 1:
+            del self.config["printer_types"][type_id]
+            self.save_config()
+            return True
+        return False
     
     def load_config(self):
         """Load printer configuration from JSON file"""
@@ -185,22 +205,49 @@ class QRPDFPrinter:
         
         # Default configuration
         self.config = {
-            "printers": {
+            "printer_types": {
                 "label": {
-                    "name": "default",
+                    "display_name": "Label Printer",
+                    "prefix": "label",
+                    "printer_name": "default",
                     "media": "auto (printer default)",
-                    "options": []
+                    "options": [],
+                    "media_options": [
+                        "auto (printer default)",
+                        "Custom.2x1in",
+                        "Custom.4x6in", 
+                        "Custom.51x25mm",
+                        "Custom.102x51mm",
+                        "Custom.4x2in",
+                        "Custom.3x1in",
+                        "Custom.62x29mm",
+                        "na_index-4x6_4x6in",
+                        "om_small-photo_100x150mm"
+                    ]
                 },
                 "receipt": {
-                    "name": "default",
+                    "display_name": "Receipt Printer",
+                    "prefix": "receipt",
+                    "printer_name": "default",
                     "media": "auto (printer default)",
-                    "options": []
+                    "options": [],
+                    "media_options": [
+                        "auto (printer default)",
+                        "Receipt",
+                        "Custom.3x11in",
+                        "Custom.80mm",
+                        "Custom.58mm",
+                        "Custom.57x32000mm",
+                        "Custom.80x200mm"
+                    ]
                 }
             },
             "settings": {
                 "auto_print": True,
                 "auto_clear": True,
-                "timeout": 30
+                "timeout": 30,
+                "qr_separator": ":",
+                "allow_custom_types": True
             }
         }
         
@@ -209,8 +256,17 @@ class QRPDFPrinter:
             try:
                 with open(self.config_file, 'r') as f:
                     loaded_config = json.load(f)
-                    # Merge with defaults to ensure all keys exist
-                    self.config.update(loaded_config)
+                    
+                    # Handle backward compatibility with old "printers" format
+                    if "printers" in loaded_config and "printer_types" not in loaded_config:
+                        self._migrate_old_config(loaded_config)
+                    else:
+                        # Merge with defaults to ensure all keys exist
+                        if "printer_types" in loaded_config:
+                            self.config["printer_types"].update(loaded_config["printer_types"])
+                        if "settings" in loaded_config:
+                            self.config["settings"].update(loaded_config["settings"])
+                            
                 print(f"Configuration loaded from {self.config_file}")
             except Exception as e:
                 print(f"Error loading config: {e}")
@@ -220,6 +276,22 @@ class QRPDFPrinter:
             # Create default config file
             self.save_config()
             print(f"Created default configuration file: {self.config_file}")
+    
+    def _migrate_old_config(self, old_config):
+        """Migrate old printer config format to new dynamic format"""
+        if "printers" in old_config:
+            for old_type, old_settings in old_config["printers"].items():
+                if old_type in self.config["printer_types"]:
+                    self.config["printer_types"][old_type]["printer_name"] = old_settings.get("name", "default")
+                    self.config["printer_types"][old_type]["media"] = old_settings.get("media", "auto (printer default)")
+                    self.config["printer_types"][old_type]["options"] = old_settings.get("options", [])
+        
+        if "settings" in old_config:
+            self.config["settings"].update(old_config["settings"])
+        
+        # Save migrated config
+        self.save_config()
+        print("Migrated old configuration format to new dynamic format")
     
     def save_config(self):
         """Save current configuration to JSON file"""
@@ -340,46 +412,9 @@ class QRPDFPrinter:
         # Printer configuration section
         config_frame = ttk.LabelFrame(main_frame, text="Printer Configuration", padding="5")
         config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        config_frame.columnconfigure(1, weight=1)
-        config_frame.columnconfigure(3, weight=1)
         
-        # Label printer
-        ttk.Label(config_frame, text="Label Printer:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
-        self.label_printer_var = tk.StringVar(value=self.config['printers']['label']['name'])
-        label_combo = ttk.Combobox(config_frame, textvariable=self.label_printer_var, width=25)
-        label_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 5))
-        
-        ttk.Label(config_frame, text="Media:").grid(row=0, column=2, sticky=tk.W, padx=(5, 5))
-        self.label_media_var = tk.StringVar(value=self.config['printers']['label'].get('media', 'auto'))
-        label_media_combo = ttk.Combobox(config_frame, textvariable=self.label_media_var, width=20)
-        label_media_combo['values'] = self.get_media_options('label')
-        label_media_combo.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
-        
-        # Receipt printer  
-        ttk.Label(config_frame, text="Receipt Printer:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10))
-        self.receipt_printer_var = tk.StringVar(value=self.config['printers']['receipt']['name'])
-        receipt_combo = ttk.Combobox(config_frame, textvariable=self.receipt_printer_var, width=25)
-        receipt_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 5))
-        
-        ttk.Label(config_frame, text="Media:").grid(row=1, column=2, sticky=tk.W, padx=(5, 5))
-        self.receipt_media_var = tk.StringVar(value=self.config['printers']['receipt'].get('media', 'auto'))
-        receipt_media_combo = ttk.Combobox(config_frame, textvariable=self.receipt_media_var, width=20)
-        receipt_media_combo['values'] = self.get_media_options('receipt')
-        receipt_media_combo.grid(row=1, column=3, sticky=(tk.W, tk.E), padx=(0, 5))
-        
-        # Populate printer dropdowns
-        available_printers = ['default'] + self.get_available_printers()
-        label_combo['values'] = available_printers
-        receipt_combo['values'] = available_printers
-        
-        # Config buttons
-        config_btn_frame = ttk.Frame(config_frame)
-        config_btn_frame.grid(row=0, column=4, rowspan=2, padx=(5, 0))
-        
-        ttk.Button(config_btn_frame, text="Refresh\nPrinters", 
-                  command=lambda: self.refresh_printer_list(label_combo, receipt_combo)).pack(pady=(0, 5))
-        ttk.Button(config_btn_frame, text="Save\nConfig", 
-                  command=self.save_printer_config).pack()
+        # Create dynamic printer configuration
+        self.create_dynamic_printer_config(config_frame)
         
         # Current job info
         job_frame = ttk.LabelFrame(main_frame, text="Current Job", padding="5")
@@ -459,24 +494,192 @@ class QRPDFPrinter:
         # Initial log message (after log widget is created)
         self.log("QR PDF Printer ready. Scan QR code or type QR data in the input field above.")
     
-    def refresh_printer_list(self, label_combo, receipt_combo):
-        """Refresh the list of available printers"""
-        available_printers = ['default'] + self.get_available_printers()
-        label_combo['values'] = available_printers
-        receipt_combo['values'] = available_printers
-        self.log("Printer list refreshed")
-    
-    def save_printer_config(self):
-        """Save current printer configuration"""
-        self.config['printers']['label']['name'] = self.label_printer_var.get()
-        self.config['printers']['label']['media'] = self.label_media_var.get()
-        self.config['printers']['receipt']['name'] = self.receipt_printer_var.get()
-        self.config['printers']['receipt']['media'] = self.receipt_media_var.get()
-        self.config['settings']['auto_print'] = self.auto_print_var.get()
+    def create_dynamic_printer_config(self, parent_frame):
+        """Create dynamic printer configuration UI"""
+        # Store references to UI elements
+        self.printer_vars = {}
+        self.media_vars = {}
+        self.printer_combos = {}
+        self.media_combos = {}
         
-        self.save_config()
-        self.log("Printer configuration saved")
-        messagebox.showinfo("Config Saved", "Printer configuration has been saved!")
+        # Create notebook for better organization
+        notebook = ttk.Notebook(parent_frame)
+        notebook.pack(fill='both', expand=True)
+        
+        # QR Settings tab
+        qr_tab = ttk.Frame(notebook)
+        notebook.add(qr_tab, text="QR Settings")
+        
+        # Separator setting
+        ttk.Label(qr_tab, text="QR Separator:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.separator_var = tk.StringVar(value=self.config["settings"].get("qr_separator", ":"))
+        separator_entry = ttk.Entry(qr_tab, textvariable=self.separator_var, width=5)
+        separator_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        ttk.Label(qr_tab, text="Valid Prefixes:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.prefixes_label = ttk.Label(qr_tab, text=", ".join(self.get_valid_prefixes()), 
+                                       font=('TkDefaultFont', 9, 'bold'))
+        self.prefixes_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        # Printer Types tab
+        printers_tab = ttk.Frame(notebook)
+        notebook.add(printers_tab, text="Printer Types")
+        
+        # Create scrollable frame for printer types
+        canvas = tk.Canvas(printers_tab)
+        scrollbar = ttk.Scrollbar(printers_tab, orient="vertical", command=canvas.yview)
+        self.scrollable_frame = ttk.Frame(canvas)
+        
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Create printer type configurations
+        self.refresh_printer_type_config()
+        
+        # Add buttons frame
+        btn_frame = ttk.Frame(parent_frame)
+        btn_frame.pack(fill='x', pady=(5, 0))
+        
+        ttk.Button(btn_frame, text="Add Printer Type", 
+                  command=self.add_new_printer_type).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Remove Selected", 
+                  command=self.remove_selected_printer_type).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Refresh Printers", 
+                  command=self.refresh_all_printer_lists).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Save Configuration", 
+                  command=self.save_all_printer_config).pack(side=tk.LEFT)
+    
+    def refresh_printer_type_config(self):
+        """Refresh the dynamic printer type configuration UI"""
+        # Clear existing widgets
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        self.printer_vars.clear()
+        self.media_vars.clear()
+        self.printer_combos.clear()
+        self.media_combos.clear()
+        
+        available_printers = ['default'] + self.get_available_printers()
+        
+        row = 0
+        for type_id, type_config in self.config["printer_types"].items():
+            # Type frame
+            type_frame = ttk.LabelFrame(self.scrollable_frame, text=type_config["display_name"], padding="5")
+            type_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
+            type_frame.columnconfigure(1, weight=1)
+            type_frame.columnconfigure(3, weight=1)
+            
+            # Prefix
+            ttk.Label(type_frame, text="Prefix:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+            prefix_var = tk.StringVar(value=type_config["prefix"])
+            prefix_entry = ttk.Entry(type_frame, textvariable=prefix_var, width=15)
+            prefix_entry.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+            
+            # Store reference for saving
+            setattr(self, f"{type_id}_prefix_var", prefix_var)
+            
+            # Printer selection
+            ttk.Label(type_frame, text="Printer:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10))
+            printer_var = tk.StringVar(value=type_config["printer_name"])
+            printer_combo = ttk.Combobox(type_frame, textvariable=printer_var, values=available_printers, width=25)
+            printer_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+            
+            # Media selection
+            ttk.Label(type_frame, text="Media:").grid(row=1, column=2, sticky=tk.W, padx=(0, 10))
+            media_var = tk.StringVar(value=type_config["media"])
+            media_combo = ttk.Combobox(type_frame, textvariable=media_var, 
+                                     values=type_config["media_options"], width=20)
+            media_combo.grid(row=1, column=3, sticky=(tk.W, tk.E), padx=(0, 10))
+            
+            # Store references
+            self.printer_vars[type_id] = printer_var
+            self.media_vars[type_id] = media_var
+            self.printer_combos[type_id] = printer_combo
+            self.media_combos[type_id] = media_combo
+            
+            row += 1
+        
+        # Update prefixes display
+        self.prefixes_label.configure(text=", ".join(self.get_valid_prefixes()))
+    
+    def add_new_printer_type(self):
+        """Add a new printer type"""
+        dialog = PrinterTypeDialog(self.root, self)
+        self.root.wait_window(dialog.dialog)
+        if dialog.result:
+            type_id, display_name, prefix, media_options = dialog.result
+            if type_id not in self.config["printer_types"]:
+                self.add_printer_type(type_id, display_name, prefix, media_options)
+                self.refresh_printer_type_config()
+                self.log(f"Added new printer type: {display_name}")
+            else:
+                messagebox.showerror("Error", f"Printer type '{type_id}' already exists!")
+    
+    def remove_selected_printer_type(self):
+        """Remove a selected printer type"""
+        types = list(self.config["printer_types"].keys())
+        if len(types) <= 1:
+            messagebox.showwarning("Warning", "Cannot remove the last printer type!")
+            return
+        
+        dialog = PrinterTypeSelectionDialog(self.root, types)
+        self.root.wait_window(dialog.dialog)
+        if dialog.result:
+            type_id = dialog.result
+            if self.remove_printer_type(type_id):
+                self.refresh_printer_type_config()
+                self.log(f"Removed printer type: {type_id}")
+            else:
+                messagebox.showerror("Error", "Cannot remove printer type!")
+    
+    def refresh_all_printer_lists(self):
+        """Refresh all printer dropdown lists"""
+        available_printers = ['default'] + self.get_available_printers()
+        for combo in self.printer_combos.values():
+            combo['values'] = available_printers
+        self.log("Printer lists refreshed")
+    
+    def save_all_printer_config(self):
+        """Save all printer configuration changes"""
+        try:
+            # Update separator
+            self.config["settings"]["qr_separator"] = self.separator_var.get()
+            
+            # Update printer configurations
+            for type_id in self.config["printer_types"]:
+                if type_id in self.printer_vars:
+                    self.config["printer_types"][type_id]["printer_name"] = self.printer_vars[type_id].get()
+                    self.config["printer_types"][type_id]["media"] = self.media_vars[type_id].get()
+                
+                # Update prefix if it exists
+                prefix_var = getattr(self, f"{type_id}_prefix_var", None)
+                if prefix_var:
+                    self.config["printer_types"][type_id]["prefix"] = prefix_var.get()
+            
+            # Update auto-print setting
+            self.config["settings"]["auto_print"] = self.auto_print_var.get()
+            
+            self.save_config()
+            self.log("All printer configuration saved")
+            messagebox.showinfo("Success", "Configuration saved successfully!")
+            
+            # Refresh prefixes display
+            self.prefixes_label.configure(text=", ".join(self.get_valid_prefixes()))
+            
+        except Exception as e:
+            self.log(f"Error saving configuration: {e}")
+            messagebox.showerror("Error", f"Failed to save configuration: {e}")
+    
+    # Note: Legacy methods removed - now using dynamic configuration
     
     def update_status(self, message, color='blue'):
         """Update status label"""
@@ -490,20 +693,26 @@ class QRPDFPrinter:
             self.process_btn.configure(state='normal')
             # Try to parse and show preview
             try:
-                if ':' in qr_data and qr_data.count(':') >= 1:
-                    parts = qr_data.split(':', 1)
+                separator = self.config["settings"].get("qr_separator", ":")
+                if separator in qr_data and qr_data.count(separator) >= 1:
+                    parts = qr_data.split(separator, 1)
                     if len(parts) == 2:
-                        print_type, url = parts
-                        if print_type.lower() in ['label', 'receipt']:
-                            self.job_type_var.set(print_type.upper())
+                        prefix, url = parts
+                        printer_type_id = self.get_printer_type_by_prefix(prefix.lower())
+                        
+                        if printer_type_id:
+                            type_config = self.config["printer_types"][printer_type_id]
+                            self.job_type_var.set(type_config["display_name"])
                             display_url = url if len(url) <= 60 else url[:57] + "..."
                             self.job_url_var.set(display_url)
-                            self.update_status(f"Ready to print {print_type} - Press Enter or click Process", 'green')
+                            self.update_status(f"Ready to print {type_config['display_name']} - Press Enter or click Process", 'green')
                             return
                 
+                valid_prefixes = self.get_valid_prefixes()
+                separator = self.config["settings"].get("qr_separator", ":")
                 self.job_type_var.set("Invalid Format")
-                self.job_url_var.set("Expected: type:url")
-                self.update_status("Invalid QR format. Expected: 'label:url' or 'receipt:url'", 'red')
+                self.job_url_var.set(f"Expected: prefix{separator}url")
+                self.update_status(f"Invalid QR format. Expected prefixes: {', '.join(valid_prefixes)}", 'red')
                 
             except:
                 self.job_type_var.set("Parsing...")
@@ -537,25 +746,26 @@ class QRPDFPrinter:
         self.log(f"Processing QR: {qr_data}")
         
         try:
-            # Parse QR data format: "type:url"
-            if ':' in qr_data and qr_data.count(':') >= 1:
-                parts = qr_data.split(':', 1)
+            separator = self.config["settings"].get("qr_separator", ":")
+            if separator in qr_data and qr_data.count(separator) >= 1:
+                parts = qr_data.split(separator, 1)
                 if len(parts) == 2:
-                    print_type, url = parts
+                    prefix, url = parts
+                    printer_type_id = self.get_printer_type_by_prefix(prefix.lower())
                     
-                    # Validate print type
-                    if print_type.lower() in ['label', 'receipt']:
-                        self.log(f"Valid {print_type} print request detected")
+                    if printer_type_id:
+                        type_config = self.config["printer_types"][printer_type_id]
+                        self.log(f"Valid {type_config['display_name']} print request detected")
                         
                         # Save to history first
-                        self.save_to_history(url, print_type.lower(), qr_data)
+                        self.save_to_history(url, printer_type_id, qr_data)
                         
                         # Update status and start printing
-                        self.update_status(f"Processing {print_type} print...", 'orange')
+                        self.update_status(f"Processing {type_config['display_name']} print...", 'orange')
                         
                         # Start printing in background thread
                         threading.Thread(target=self.download_and_print, 
-                                       args=(url, print_type.lower()), daemon=True).start()
+                                       args=(url, printer_type_id), daemon=True).start()
                         
                         # Clear input if auto-print is enabled
                         if self.auto_print_var.get():
@@ -563,14 +773,17 @@ class QRPDFPrinter:
                         
                         return
                     else:
-                        error_msg = f"Unknown print type: '{print_type}'. Expected 'label' or 'receipt'"
+                        valid_prefixes = self.get_valid_prefixes()
+                        error_msg = f"Unknown prefix: '{prefix}'. Valid prefixes: {', '.join(valid_prefixes)}"
                         self.log(error_msg)
                         self.update_status(error_msg, 'red')
                         messagebox.showerror("Invalid QR Code", error_msg)
                         return
             
             # Invalid format
-            error_msg = "Invalid QR format. Expected: 'type:url' (e.g., 'label:https://example.com/file.pdf')"
+            valid_prefixes = self.get_valid_prefixes()
+            separator = self.config["settings"].get("qr_separator", ":")
+            error_msg = f"Invalid QR format. Expected: 'prefix{separator}url' (e.g., '{valid_prefixes[0]}{separator}https://example.com/file.pdf')"
             self.log(error_msg)
             self.update_status(error_msg, 'red')
             messagebox.showerror("Invalid QR Code", error_msg)
@@ -663,15 +876,15 @@ class QRPDFPrinter:
         except Exception as e:
             self.log(f"Error updating history status: {e}")
     
-    def send_to_printer(self, file_path, print_type):
-        """Send file to printer based on print type and configuration"""
+    def send_to_printer(self, file_path, printer_type_id):
+        """Send file to printer based on printer type and configuration"""
         try:
             system = platform.system()
-            printer_config = self.config['printers'][print_type]
-            printer_name = printer_config['name']
+            printer_config = self.config['printer_types'][printer_type_id]
+            printer_name = printer_config['printer_name']
             printer_options = printer_config.get('options', [])
             
-            self.log(f"Sending to {print_type} printer: {printer_name}")
+            self.log(f"Sending to {printer_config['display_name']}: {printer_name}")
             
             if system == "Windows":
                 if printer_name == "default":
@@ -698,7 +911,7 @@ class QRPDFPrinter:
                     cmd.extend(["-o", option])
                 
                 # Add media selection only if not auto
-                media_setting = self.config['printers'][print_type].get('media', 'auto (printer default)')
+                media_setting = printer_config.get('media', 'auto (printer default)')
                 if not media_setting.startswith('auto'):
                     cmd.extend(["-o", f"media={media_setting}"])
                 # If auto, don't add any media parameter - use printer default
@@ -718,7 +931,7 @@ class QRPDFPrinter:
                     cmd.extend(["-o", option])
                 
                 # Add media selection only if not auto
-                media_setting = self.config['printers'][print_type].get('media', 'auto (printer default)')
+                media_setting = printer_config.get('media', 'auto (printer default)')
                 if not media_setting.startswith('auto'):
                     cmd.extend(["-o", f"media={media_setting}"])
                 # If auto, don't add any media parameter - use printer default
@@ -845,6 +1058,125 @@ class QRPDFPrinter:
             self.db_manager.close()
         
         self.root.destroy()
+
+class PrinterTypeDialog:
+    """Dialog for adding a new printer type"""
+    
+    def __init__(self, parent, app):
+        self.app = app
+        self.result = None
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Add Printer Type")
+        self.dialog.geometry("400x300")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center dialog
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        
+        self.create_widgets()
+    
+    def create_widgets(self):
+        main_frame = ttk.Frame(self.dialog, padding="10")
+        main_frame.pack(fill='both', expand=True)
+        
+        # Type ID
+        ttk.Label(main_frame, text="Type ID:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.type_id_var = tk.StringVar()
+        ttk.Entry(main_frame, textvariable=self.type_id_var, width=30).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
+        
+        # Display Name
+        ttk.Label(main_frame, text="Display Name:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.display_name_var = tk.StringVar()
+        ttk.Entry(main_frame, textvariable=self.display_name_var, width=30).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5)
+        
+        # Prefix
+        ttk.Label(main_frame, text="QR Prefix:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.prefix_var = tk.StringVar()
+        ttk.Entry(main_frame, textvariable=self.prefix_var, width=30).grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5)
+        
+        # Media Options
+        ttk.Label(main_frame, text="Media Options:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
+        self.media_text = tk.Text(main_frame, height=8, width=40)
+        self.media_text.grid(row=3, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        # Default media options
+        default_media = "auto (printer default)\nCustom.4x6in\nCustom.2x1in"
+        self.media_text.insert(tk.END, default_media)
+        
+        ttk.Label(main_frame, text="(One option per line)", font=('TkDefaultFont', 8)).grid(row=4, column=1, sticky=tk.W)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=5, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(button_frame, text="OK", command=self.ok_clicked).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="Cancel", command=self.cancel_clicked).pack(side=tk.LEFT)
+        
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(3, weight=1)
+    
+    def ok_clicked(self):
+        type_id = self.type_id_var.get().strip()
+        display_name = self.display_name_var.get().strip()
+        prefix = self.prefix_var.get().strip()
+        media_options = [line.strip() for line in self.media_text.get("1.0", tk.END).split('\n') if line.strip()]
+        
+        if not type_id or not display_name or not prefix:
+            messagebox.showerror("Error", "Please fill in all required fields!")
+            return
+        
+        if not media_options:
+            media_options = ["auto (printer default)"]
+        
+        self.result = (type_id, display_name, prefix, media_options)
+        self.dialog.destroy()
+    
+    def cancel_clicked(self):
+        self.dialog.destroy()
+
+class PrinterTypeSelectionDialog:
+    """Dialog for selecting a printer type to remove"""
+    
+    def __init__(self, parent, printer_types):
+        self.result = None
+        
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Select Printer Type to Remove")
+        self.dialog.geometry("300x200")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        # Center dialog
+        self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        
+        self.create_widgets(printer_types)
+    
+    def create_widgets(self, printer_types):
+        main_frame = ttk.Frame(self.dialog, padding="10")
+        main_frame.pack(fill='both', expand=True)
+        
+        ttk.Label(main_frame, text="Select printer type to remove:").pack(pady=(0, 10))
+        
+        self.selected_type = tk.StringVar()
+        for ptype in printer_types:
+            ttk.Radiobutton(main_frame, text=ptype, variable=self.selected_type, value=ptype).pack(anchor=tk.W)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=20)
+        
+        ttk.Button(button_frame, text="Remove", command=self.ok_clicked).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="Cancel", command=self.cancel_clicked).pack(side=tk.LEFT)
+    
+    def ok_clicked(self):
+        if self.selected_type.get():
+            self.result = self.selected_type.get()
+        self.dialog.destroy()
+    
+    def cancel_clicked(self):
+        self.dialog.destroy()
 
 def main():
     root = tk.Tk()
