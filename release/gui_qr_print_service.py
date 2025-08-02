@@ -9,127 +9,7 @@ import subprocess
 import uuid
 import threading
 import json
-import queue
 from datetime import datetime
-
-class ThreadSafeDatabaseManager:
-    """Thread-safe database manager using a worker thread and queue"""
-    
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self.operation_queue = queue.Queue()
-        self.result_queue = queue.Queue()
-        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
-        self.worker_thread.start()
-        
-        # Initialize database in worker thread
-        self._execute_operation('init_db', None, None)
-    
-    def _worker(self):
-        """Worker thread that handles all database operations"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute('PRAGMA journal_mode=WAL')  # Enable WAL mode for better concurrency
-        
-        while True:
-            try:
-                operation = self.operation_queue.get(timeout=1)
-                if operation is None:  # Shutdown signal
-                    break
-                
-                op_type, query, params = operation
-                
-                try:
-                    if op_type == 'init_db':
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            CREATE TABLE IF NOT EXISTS print_history (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                url TEXT NOT NULL,
-                                print_type TEXT,
-                                qr_data TEXT,
-                                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                                status TEXT DEFAULT 'completed'
-                            )
-                        ''')
-                        conn.commit()
-                        self.result_queue.put(('success', None))
-                        
-                    elif op_type == 'insert':
-                        cursor = conn.cursor()
-                        cursor.execute(query, params)
-                        conn.commit()
-                        self.result_queue.put(('success', cursor.lastrowid))
-                        
-                    elif op_type == 'update':
-                        cursor = conn.cursor()
-                        cursor.execute(query, params)
-                        conn.commit()
-                        self.result_queue.put(('success', cursor.rowcount))
-                        
-                    elif op_type == 'delete':
-                        cursor = conn.cursor()
-                        cursor.execute(query, params)
-                        conn.commit()
-                        self.result_queue.put(('success', cursor.rowcount))
-                        
-                    elif op_type == 'select':
-                        cursor = conn.cursor()
-                        cursor.execute(query, params)
-                        results = cursor.fetchall()
-                        self.result_queue.put(('success', results))
-                        
-                    elif op_type == 'select_one':
-                        cursor = conn.cursor()
-                        cursor.execute(query, params)
-                        result = cursor.fetchone()
-                        self.result_queue.put(('success', result))
-                        
-                except Exception as e:
-                    self.result_queue.put(('error', str(e)))
-                    
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self.result_queue.put(('error', str(e)))
-        
-        conn.close()
-    
-    def _execute_operation(self, op_type, query, params, timeout=5):
-        """Execute a database operation and return the result"""
-        self.operation_queue.put((op_type, query, params))
-        
-        try:
-            status, result = self.result_queue.get(timeout=timeout)
-            if status == 'error':
-                raise Exception(f"Database error: {result}")
-            return result
-        except queue.Empty:
-            raise Exception("Database operation timed out")
-    
-    def insert(self, query, params):
-        """Insert data and return the last row id"""
-        return self._execute_operation('insert', query, params)
-    
-    def update(self, query, params):
-        """Update data and return the number of affected rows"""
-        return self._execute_operation('update', query, params)
-    
-    def delete(self, query, params):
-        """Delete data and return the number of affected rows"""
-        return self._execute_operation('delete', query, params)
-    
-    def select(self, query, params=None):
-        """Select multiple rows"""
-        return self._execute_operation('select', query, params or ())
-    
-    def select_one(self, query, params=None):
-        """Select a single row"""
-        return self._execute_operation('select_one', query, params or ())
-    
-    def close(self):
-        """Close the database manager"""
-        self.operation_queue.put(None)
-        self.worker_thread.join(timeout=2)
 
 class QRPDFPrinter:
     def __init__(self, root):
@@ -270,8 +150,20 @@ class QRPDFPrinter:
             return []
     
     def init_database(self):
-        """Initialize thread-safe database manager"""
-        self.db_manager = ThreadSafeDatabaseManager('printer_history.db')
+        """Initialize SQLite database for print history"""
+        self.conn = sqlite3.connect('printer_history.db')
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS print_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                print_type TEXT,
+                qr_data TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'completed'
+            )
+        ''')
+        self.conn.commit()
     
     def log(self, message):
         """Add message to log with timestamp"""
@@ -583,14 +475,13 @@ class QRPDFPrinter:
     
     def save_to_history(self, url, print_type, qr_data):
         """Save print job to history"""
-        try:
-            self.db_manager.insert('''
-                INSERT INTO print_history (url, print_type, qr_data, status)
-                VALUES (?, ?, ?, ?)
-            ''', (url, print_type, qr_data, 'processing'))
-            self.root.after(0, self.refresh_history)
-        except Exception as e:
-            self.log(f"Error saving to history: {e}")
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO print_history (url, print_type, qr_data, status)
+            VALUES (?, ?, ?, ?)
+        ''', (url, print_type, qr_data, 'processing'))
+        self.conn.commit()
+        self.root.after(0, self.refresh_history)
     
     def download_and_print(self, url, print_type):
         """Download PDF and send to printer"""
@@ -647,21 +538,16 @@ class QRPDFPrinter:
     
     def update_history_status(self, url, status):
         """Update the status of the most recent matching URL in history"""
-        try:
-            self.db_manager.update('''
-                UPDATE print_history 
-                SET status = ? 
-                WHERE url = ? 
-                AND id = (
-                    SELECT id FROM print_history 
-                    WHERE url = ? 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
-                )
-            ''', (status, url, url))
-            self.root.after(0, self.refresh_history)
-        except Exception as e:
-            self.log(f"Error updating history status: {e}")
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE print_history 
+            SET status = ? 
+            WHERE url = ? 
+            ORDER BY timestamp DESC 
+            LIMIT 1
+        ''', (status, url))
+        self.conn.commit()
+        self.root.after(0, self.refresh_history)
     
     def send_to_printer(self, file_path, print_type):
         """Send file to printer based on print type and configuration"""
@@ -744,41 +630,39 @@ class QRPDFPrinter:
     
     def refresh_history(self):
         """Refresh the history treeview"""
-        try:
-            for item in self.history_tree.get_children():
-                self.history_tree.delete(item)
+        for item in self.history_tree.get_children():
+            self.history_tree.delete(item)
+        
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT id, print_type, url, status, timestamp 
+            FROM print_history 
+            ORDER BY timestamp DESC
+            LIMIT 100
+        ''')
+        
+        for row in cursor.fetchall():
+            id_, print_type, url, status, timestamp = row
+            # Format timestamp
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00')) if 'Z' in timestamp else datetime.fromisoformat(timestamp)
+                formatted_time = dt.strftime("%m/%d %H:%M")
+            except:
+                formatted_time = timestamp[:16] if len(timestamp) > 16 else timestamp
             
-            rows = self.db_manager.select('''
-                SELECT id, print_type, url, status, timestamp 
-                FROM print_history 
-                ORDER BY timestamp DESC
-                LIMIT 100
-            ''')
+            # Truncate URL for display
+            display_url = url if len(url) <= 50 else url[:47] + "..."
             
-            for row in rows:
-                id_, print_type, url, status, timestamp = row
-                # Format timestamp
-                try:
-                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00')) if 'Z' in timestamp else datetime.fromisoformat(timestamp)
-                    formatted_time = dt.strftime("%m/%d %H:%M")
-                except:
-                    formatted_time = timestamp[:16] if len(timestamp) > 16 else timestamp
-                
-                # Truncate URL for display
-                display_url = url if len(url) <= 50 else url[:47] + "..."
-                
-                # Status color coding
-                status_display = status
-                if status == 'completed':
-                    status_display = '✓ Done'
-                elif status == 'failed' or status == 'error':
-                    status_display = '✗ Failed'
-                elif status == 'processing':
-                    status_display = '⏳ Processing'
-                
-                self.history_tree.insert('', 'end', values=(print_type.upper(), display_url, status_display, formatted_time), tags=(str(id_),))
-        except Exception as e:
-            self.log(f"Error refreshing history: {e}")
+            # Status color coding
+            status_display = status
+            if status == 'completed':
+                status_display = '✓ Done'
+            elif status == 'failed' or status == 'error':
+                status_display = '✗ Failed'
+            elif status == 'processing':
+                status_display = '⏳ Processing'
+            
+            self.history_tree.insert('', 'end', values=(print_type.upper(), display_url, status_display, formatted_time), tags=(str(id_),))
     
     def get_selected_item(self):
         """Get selected item from history"""
@@ -790,15 +674,13 @@ class QRPDFPrinter:
         item = selection[0]
         item_id = self.history_tree.item(item, 'tags')[0]
         
-        try:
-            result = self.db_manager.select_one('SELECT url, print_type, qr_data FROM print_history WHERE id = ?', (item_id,))
-            
-            if result:
-                return {'id': item_id, 'url': result[0], 'print_type': result[1], 'qr_data': result[2]}
-            return None
-        except Exception as e:
-            self.log(f"Error getting selected item: {e}")
-            return None
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT url, print_type, qr_data FROM print_history WHERE id = ?', (item_id,))
+        result = cursor.fetchone()
+        
+        if result:
+            return {'id': item_id, 'url': result[0], 'print_type': result[1], 'qr_data': result[2]}
+        return None
     
     def reprint_selected(self):
         """Reprint the selected item"""
@@ -818,22 +700,20 @@ class QRPDFPrinter:
             return
         
         if messagebox.askyesno("Confirm Delete", "Delete selected item from history?"):
-            try:
-                self.db_manager.delete('DELETE FROM print_history WHERE id = ?', (item['id'],))
-                self.refresh_history()
-                self.log("History item deleted")
-            except Exception as e:
-                self.log(f"Error deleting history item: {e}")
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM print_history WHERE id = ?', (item['id'],))
+            self.conn.commit()
+            self.refresh_history()
+            self.log("History item deleted")
     
     def clear_history(self):
         """Clear all history"""
         if messagebox.askyesno("Confirm Clear", "Clear all print history?"):
-            try:
-                self.db_manager.delete('DELETE FROM print_history', ())
-                self.refresh_history()
-                self.log("All history cleared")
-            except Exception as e:
-                self.log(f"Error clearing history: {e}")
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM print_history')
+            self.conn.commit()
+            self.refresh_history()
+            self.log("All history cleared")
     
     def on_history_double_click(self, event):
         """Handle double-click on history item"""
@@ -841,8 +721,8 @@ class QRPDFPrinter:
     
     def on_closing(self):
         """Handle window closing"""
-        if hasattr(self, 'db_manager'):
-            self.db_manager.close()
+        if hasattr(self, 'conn'):
+            self.conn.close()
         
         self.root.destroy()
 
