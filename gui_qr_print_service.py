@@ -135,15 +135,9 @@ class QRPDFPrinter:
     def __init__(self, root):
         self.root = root
         self.root.title("QR PDF Printer v1.01")
-        # Maximize window while keeping window decorations
-        try:
-            self.root.state('zoomed')  # Windows/Linux maximize
-        except:
-            try:
-                self.root.attributes('-zoomed', True)  # Alternative for some Linux systems
-            except:
-                # Fallback to large window size
-                self.root.geometry("1400x900")
+        
+        # Set window to maximize after it's fully loaded
+        self.root.after(100, self._maximize_window)
         
         # Status timer for error display
         self.status_timer = None
@@ -162,6 +156,25 @@ class QRPDFPrinter:
         
         # Focus on QR input field
         self.qr_entry.focus_set()
+    
+    def _maximize_window(self):
+        """Maximize window using multiple methods for cross-platform compatibility"""
+        try:
+            # Method 1: Use wm_state for cross-platform maximize
+            self.root.wm_state('zoomed')
+        except:
+            try:
+                # Method 2: Use attributes for Linux systems
+                self.root.attributes('-zoomed', 1)
+            except:
+                try:
+                    # Method 3: Set window to screen dimensions
+                    width = self.root.winfo_screenwidth()
+                    height = self.root.winfo_screenheight()
+                    self.root.geometry(f"{width}x{height}+0+0")
+                except:
+                    # Method 4: Fallback to large fixed size
+                    self.root.geometry("1400x900+50+50")
         
     def get_media_options(self, printer_type_id):
         """Get available media options for a printer type"""
