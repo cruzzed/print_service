@@ -14,6 +14,29 @@ echo "========================================="
 echo "QR Print Client Installation & Launcher"
 echo "========================================="
 
+# Check if we're in a git repository and pull updates
+if [ -d ".git" ]; then
+    echo "Checking for updates..."
+    git fetch --quiet
+    UPDATES=$(git rev-list HEAD...origin/$(git branch --show-current) --count 2>/dev/null || echo "0")
+    if [ "$UPDATES" -gt 0 ]; then
+        echo "Found $UPDATES update(s). Pulling latest changes..."
+        git pull
+        echo "✓ Updates applied"
+        
+        # Check if install script itself was updated, restart if so
+        if git diff HEAD~$UPDATES HEAD --name-only | grep -q "install.sh"; then
+            echo "Installer script updated. Restarting with new version..."
+            echo "========================================="
+            exec "$0" "$@"
+        fi
+    else
+        echo "✓ Already up to date"
+    fi
+else
+    echo "✓ Not a git repository, skipping update check"
+fi
+
 # Check if Python is available
 if ! command -v python3 &> /dev/null; then
     if ! command -v python &> /dev/null; then

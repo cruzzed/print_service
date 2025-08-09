@@ -134,8 +134,16 @@ class ThreadSafeDatabaseManager:
 class QRPDFPrinter:
     def __init__(self, root):
         self.root = root
-        self.root.title("QR PDF Printer")
-        self.root.geometry("700x650")
+        self.root.title("QR PDF Printer v1.01")
+        self.root.state('zoomed')  # Windows fullscreen
+        self.root.attributes('-zoomed', True)  # Linux fullscreen
+        try:
+            self.root.attributes('-fullscreen', True)  # Cross-platform fullscreen
+        except:
+            pass
+        
+        # Status timer for error display
+        self.status_timer = None
         
         # Load configuration
         self.load_config()
@@ -270,8 +278,7 @@ class QRPDFPrinter:
                 print(f"Configuration loaded from {self.config_file}")
             except Exception as e:
                 print(f"Error loading config: {e}")
-                messagebox.showwarning("Config Warning", 
-                    f"Could not load config file: {e}\nUsing default settings.")
+                # Don't show dialog for config warnings - just log them
         else:
             # Create default config file
             self.save_config()
@@ -299,7 +306,8 @@ class QRPDFPrinter:
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
         except Exception as e:
-            messagebox.showerror("Config Error", f"Could not save config: {e}")
+            print(f"Config save error: {e}")
+            # Don't show dialog for config save errors - just log them
     
     def get_available_printers(self):
         """Get list of available printers on the system"""
@@ -622,13 +630,16 @@ class QRPDFPrinter:
                 self.refresh_printer_type_config()
                 self.log(f"Added new printer type: {display_name}")
             else:
-                messagebox.showerror("Error", f"Printer type '{type_id}' already exists!")
+                error_msg = f"Printer type '{type_id}' already exists!"
+                self.log(error_msg)
+                self.update_status(error_msg, 'red', auto_reset=True)
     
     def remove_selected_printer_type(self):
         """Remove a selected printer type"""
         types = list(self.config["printer_types"].keys())
         if len(types) <= 1:
-            messagebox.showwarning("Warning", "Cannot remove the last printer type!")
+            self.log("Cannot remove the last printer type!")
+            self.update_status("Cannot remove the last printer type!", 'red', auto_reset=True)
             return
         
         dialog = PrinterTypeSelectionDialog(self.root, types)
@@ -639,7 +650,9 @@ class QRPDFPrinter:
                 self.refresh_printer_type_config()
                 self.log(f"Removed printer type: {type_id}")
             else:
-                messagebox.showerror("Error", "Cannot remove printer type!")
+                error_msg = "Cannot remove printer type!"
+                self.log(error_msg)
+                self.update_status(error_msg, 'red', auto_reset=True)
     
     def refresh_all_printer_lists(self):
         """Refresh all printer dropdown lists"""
@@ -670,21 +683,36 @@ class QRPDFPrinter:
             
             self.save_config()
             self.log("All printer configuration saved")
-            messagebox.showinfo("Success", "Configuration saved successfully!")
+            self.update_status("Configuration saved successfully!", 'green', auto_reset=True)
             
             # Refresh prefixes display
             self.prefixes_label.configure(text=", ".join(self.get_valid_prefixes()))
             
         except Exception as e:
             self.log(f"Error saving configuration: {e}")
-            messagebox.showerror("Error", f"Failed to save configuration: {e}")
+            self.update_status(f"Failed to save configuration: {e}", 'red', auto_reset=True)
     
     # Note: Legacy methods removed - now using dynamic configuration
     
-    def update_status(self, message, color='blue'):
-        """Update status label"""
+    def update_status(self, message, color='blue', auto_reset=False):
+        """Update status label with optional auto-reset to Ready"""
+        # Cancel any existing timer
+        if self.status_timer:
+            self.root.after_cancel(self.status_timer)
+            self.status_timer = None
+        
         self.status_var.set(message)
         self.status_label.configure(foreground=color)
+        
+        # Set timer to reset to Ready after 5 seconds for errors
+        if auto_reset and color in ['red', 'orange']:
+            self.status_timer = self.root.after(5000, self._reset_status_to_ready)
+    
+    def _reset_status_to_ready(self):
+        """Reset status to Ready after error display"""
+        self.status_var.set("Ready - waiting for QR code...")
+        self.status_label.configure(foreground='blue')
+        self.status_timer = None
     
     def on_qr_input_change(self, event):
         """Handle changes in QR input field"""
@@ -740,7 +768,7 @@ class QRPDFPrinter:
         """Process the QR input and start printing"""
         qr_data = self.qr_var.get().strip()
         if not qr_data:
-            messagebox.showwarning("Warning", "Please scan or enter QR code data")
+            self.update_status("Please scan or enter QR code data", 'red', auto_reset=True)
             return
         
         self.log(f"Processing QR: {qr_data}")
@@ -776,8 +804,7 @@ class QRPDFPrinter:
                         valid_prefixes = self.get_valid_prefixes()
                         error_msg = f"Unknown prefix: '{prefix}'. Valid prefixes: {', '.join(valid_prefixes)}"
                         self.log(error_msg)
-                        self.update_status(error_msg, 'red')
-                        messagebox.showerror("Invalid QR Code", error_msg)
+                        self.update_status(error_msg, 'red', auto_reset=True)
                         return
             
             # Invalid format
@@ -785,14 +812,12 @@ class QRPDFPrinter:
             separator = self.config["settings"].get("qr_separator", ":")
             error_msg = f"Invalid QR format. Expected: 'prefix{separator}url' (e.g., '{valid_prefixes[0]}{separator}https://example.com/file.pdf')"
             self.log(error_msg)
-            self.update_status(error_msg, 'red')
-            messagebox.showerror("Invalid QR Code", error_msg)
+            self.update_status(error_msg, 'red', auto_reset=True)
             
         except Exception as e:
             error_msg = f"QR processing error: {str(e)}"
             self.log(error_msg)
-            self.update_status(error_msg, 'red')
-            messagebox.showerror("QR Error", error_msg)
+            self.update_status(error_msg, 'red', auto_reset=True)
     
     def save_to_history(self, url, print_type, qr_data):
         """Save print job to history"""
@@ -841,14 +866,13 @@ class QRPDFPrinter:
                 self.update_history_status(url, 'completed')
             else:
                 self.root.after(0, lambda: self.log(f"✗ {print_type.title()} print failed"))
-                self.root.after(0, lambda: self.update_status(f"✗ Print failed. Check printer connection.", 'red'))
+                self.root.after(0, lambda: self.update_status(f"✗ Print failed. Check printer connection.", 'red', auto_reset=True))
                 self.update_history_status(url, 'failed')
                 
         except Exception as e:
             error_msg = str(e)
             self.root.after(0, lambda: self.log(f"Print error: {error_msg}"))
-            self.root.after(0, lambda: self.update_status(f"Print error: {error_msg}", 'red'))
-            self.root.after(0, lambda: messagebox.showerror("Print Error", f"Failed to print: {error_msg}"))
+            self.root.after(0, lambda: self.update_status(f"Print error: {error_msg}", 'red', auto_reset=True))
             self.update_history_status(url, 'error')
         finally:
             # Clean up temp file
@@ -941,7 +965,9 @@ class QRPDFPrinter:
                 return True
                 
             else:
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Printing not supported on {system}"))
+                error_msg = f"Printing not supported on {system}"
+                self.root.after(0, lambda: self.log(error_msg))
+                self.root.after(0, lambda: self.update_status(error_msg, 'red', auto_reset=True))
                 return False
                 
         except subprocess.CalledProcessError as e:
@@ -997,7 +1023,8 @@ class QRPDFPrinter:
         """Get selected item from history"""
         selection = self.history_tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "Please select an item from history")
+            self.log("Please select an item from history")
+            self.update_status("Please select an item from history", 'red', auto_reset=True)
             return None
         
         item = selection[0]
@@ -1124,7 +1151,10 @@ class PrinterTypeDialog:
         media_options = [line.strip() for line in self.media_text.get("1.0", tk.END).split('\n') if line.strip()]
         
         if not type_id or not display_name or not prefix:
-            messagebox.showerror("Error", "Please fill in all required fields!")
+            # For dialog boxes, we can't use the main app's status, so we'll keep minimal error handling here
+            # This dialog will close and the user can try again
+            self.app.log("Please fill in all required fields!")
+            self.app.update_status("Please fill in all required fields!", 'red', auto_reset=True)
             return
         
         if not media_options:

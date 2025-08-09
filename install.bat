@@ -13,6 +13,35 @@ echo =========================================
 echo QR Print Client Installation ^& Launcher
 echo =========================================
 
+REM Check if we're in a git repository and pull updates
+if exist ".git" (
+    echo Checking for updates...
+    git fetch --quiet 2>nul
+    if !errorlevel! equ 0 (
+        for /f %%i in ('git rev-list HEAD...origin/HEAD --count 2^>nul') do set "UPDATES=%%i"
+        if not defined UPDATES set "UPDATES=0"
+        if !UPDATES! gtr 0 (
+            echo Found !UPDATES! update^(s^). Pulling latest changes...
+            git pull
+            echo ✓ Updates applied
+            
+            REM Check if install script itself was updated, restart if so
+            for /f %%i in ('git diff HEAD~!UPDATES! HEAD --name-only ^| findstr "install.bat"') do (
+                echo Installer script updated. Restarting with new version...
+                echo =========================================
+                start "" "%~f0" %*
+                exit /b 0
+            )
+        ) else (
+            echo ✓ Already up to date
+        )
+    ) else (
+        echo ✓ Git fetch failed, continuing with current version
+    )
+) else (
+    echo ✓ Not a git repository, skipping update check
+)
+
 REM Check if Python is available
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
