@@ -22,21 +22,25 @@ if exist ".git" (
         if not defined UPDATES set "UPDATES=0"
         if !UPDATES! gtr 0 (
             echo Found !UPDATES! update^(s^). Pulling latest changes...
-            git pull
-            echo ✓ Updates applied
-            
-            REM Check if install script itself was updated, restart if so
-            for /f %%i in ('git diff HEAD~!UPDATES! HEAD --name-only ^| findstr "install.bat"') do (
-                echo Installer script updated. Restarting with new version...
-                echo =========================================
-                start "" "%~f0" %*
-                exit /b 0
+            git pull 2>nul
+            if !errorlevel! equ 0 (
+                echo ✓ Updates applied
+                
+                REM Check if install script itself was updated, restart if so
+                for /f %%i in ('git diff HEAD~!UPDATES! HEAD --name-only 2^>nul ^| findstr "install.bat" 2^>nul') do (
+                    echo Installer script updated. Restarting with new version...
+                    echo =========================================
+                    start "" "%~f0" %*
+                    exit /b 0
+                )
+            ) else (
+                echo ⚠ Git pull failed ^(offline mode?^). Continuing with current version...
             )
         ) else (
             echo ✓ Already up to date
         )
     ) else (
-        echo ✓ Git fetch failed, continuing with current version
+        echo ⚠ Git fetch failed ^(offline mode?^). Continuing with current version...
     )
 ) else (
     echo ✓ Not a git repository, skipping update check
