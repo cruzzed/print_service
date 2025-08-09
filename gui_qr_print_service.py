@@ -778,6 +778,9 @@ class QRPDFPrinter:
         """Handle Enter key in QR input field"""
         if self.auto_print_var.get():
             self.process_qr_input()
+        
+        # Always clear input on Enter, regardless of auto-print setting or validation status
+        self.clear_input()
     
     def clear_input(self):
         """Clear the QR input field"""
@@ -817,10 +820,6 @@ class QRPDFPrinter:
                         # Start printing in background thread
                         threading.Thread(target=self.download_and_print, 
                                        args=(url, printer_type_id), daemon=True).start()
-                        
-                        # Clear input if auto-print is enabled
-                        if self.auto_print_var.get():
-                            self.root.after(2000, self.clear_input)  # Clear after 2 seconds
                         
                         return
                     else:
