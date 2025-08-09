@@ -135,12 +135,15 @@ class QRPDFPrinter:
     def __init__(self, root):
         self.root = root
         self.root.title("QR PDF Printer v1.01")
-        self.root.state('zoomed')  # Windows fullscreen
-        self.root.attributes('-zoomed', True)  # Linux fullscreen
+        # Maximize window while keeping window decorations
         try:
-            self.root.attributes('-fullscreen', True)  # Cross-platform fullscreen
+            self.root.state('zoomed')  # Windows/Linux maximize
         except:
-            pass
+            try:
+                self.root.attributes('-zoomed', True)  # Alternative for some Linux systems
+            except:
+                # Fallback to large window size
+                self.root.geometry("1400x900")
         
         # Status timer for error display
         self.status_timer = None
@@ -417,12 +420,27 @@ class QRPDFPrinter:
         ttk.Checkbutton(action_frame, text="Auto-print on scan", 
                        variable=self.auto_print_var).pack(side=tk.LEFT, padx=(10, 0))
         
-        # Printer configuration section
-        config_frame = ttk.LabelFrame(main_frame, text="Printer Configuration", padding="5")
-        config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Middle section with side-by-side layout
+        middle_frame = ttk.Frame(main_frame)
+        middle_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        middle_frame.columnconfigure(0, weight=1)
+        middle_frame.columnconfigure(1, weight=1)
+        
+        # Printer configuration section (left side)
+        config_frame = ttk.LabelFrame(middle_frame, text="Printer Configuration", padding="5")
+        config_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
         # Create dynamic printer configuration
         self.create_dynamic_printer_config(config_frame)
+        
+        # Activity log (right side)
+        log_frame = ttk.LabelFrame(middle_frame, text="Activity Log", padding="5")
+        log_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, width=50)
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Current job info
         job_frame = ttk.LabelFrame(main_frame, text="Current Job", padding="5")
@@ -480,14 +498,6 @@ class QRPDFPrinter:
                   command=self.clear_history).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(hist_btn_frame, text="Refresh", 
                   command=self.refresh_history).pack(side=tk.LEFT)
-        
-        # Log area at bottom
-        log_frame = ttk.LabelFrame(main_frame, text="Activity Log", padding="5")
-        log_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        log_frame.columnconfigure(0, weight=1)
-        
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, width=80)
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         # Bind events
         self.history_tree.bind('<Double-1>', self.on_history_double_click)
